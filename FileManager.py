@@ -63,32 +63,31 @@ class FileManager:
         # Redimensionner l'image pour pixelliser
         small = cv2.resize(image, (width // block_size, height // block_size), interpolation=cv2.INTER_LINEAR)
         if not greyscale:
-            small = FileManager.convert_to_black_and_white(small)
+            small = FileManager.soft_black_and_white(small)
         # Agrandir l'image pixellisée à sa taille originale
         pixelated = cv2.resize(small, (width, height), interpolation=cv2.INTER_NEAREST)
         return pixelated
 
     @staticmethod
-    def convert_to_black_and_white(image):
+    def blur_image(image, kernel_radius=0):
         """
-        Convertit une image en niveaux de gris en noir et blanc avec une distribution aléatoire
+        Applique un effet de flou gaussien a une image
 
         Args:
-            image (numpy.ndarray): Image à convertir.
+            image (numpy.ndarray): Image a flouter
+            kernel_radius (int): Rayon du noyau >= 0
 
         Returns:
-            numpy.ndarray: Image en noir et blanc.
+            numpy.ndarray: Image floutée.
         """
-        # Convertir l'image en niveaux de gris
-        gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        # Normaliser l'image à une échelle de 0 à 1
-        normalized_gray = gray_image / 255.0
-        # Générer une distribution aléatoire
-        random_matrix = np.random.random(normalized_gray.shape)
-        # Créer une image binaire avec la distribution aléatoire
-        black_and_white = np.where(normalized_gray > random_matrix, 255, 0).astype(np.uint8)
+        # Vérifier que la taille du noyau est un nombre impair
+        if not kernel_radius:
+            return image
 
-        return black_and_white
+        kernel_size = kernel_radius * 2 + 1
+        # Appliquer le flou gaussien
+        blurred_image = cv2.GaussianBlur(image, (kernel_size, kernel_size), 0)
+        return blurred_image
 
     @staticmethod
     def soft_black_and_white(image):
@@ -118,61 +117,7 @@ class FileManager:
 
         return black_and_white
 
-    def extract_frames(self, fps_arg=2.3, greyscale=False, block_size=0):
-        """
-        Extrait des frames d'une vidéo à une fréquence spécifiée et pixellise les images.
-
-        Args:
-            fps_arg (float): nombre d'images par seconde a extraire.
-            greyscale (bool): Autorise les nuances de gris
-            block_size (int): Taille des blocs pour la pixellisation.
-        """
-
-        # Ouvrir la vidéo
-        cap = cv2.VideoCapture(self.video_path)
-
-        if not cap.isOpened():
-            print(f"Erreur lors de l'ouverture de la vidéo: {self.video_path}")
-            return
-
-        # Récupérer les propriétés de la vidéo
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        print(f"FPS de la vidéo: {fps}")
-        print(f"Nombre total de frames: {total_frames}")
-
-        # Calculer l'intervalle des frames à extraire
-        frame_interval = int(fps / fps_arg)
-        print(f"Intervalle de frames à extraire: {frame_interval}")
-
-        # Créer le dossier de sortie si il n'existe pas
-        if not os.path.exists(self.output_dir):
-            os.makedirs(self.output_dir)
-
-        frame_number = 0
-
-        while True:
-            ret, frame = cap.read()
-
-            if not ret:
-                break
-
-            # Extraire et sauvegarder les frames
-            if frame_number % frame_interval == 0:
-                frame_filename = os.path.join(self.output_dir, f"frame_{frame_number:04d}.png")
-                if block_size:
-                    frame = FileManager.pixelate_image(frame, block_size)
-                elif not greyscale:
-                    frame = FileManager.convert_to_black_and_white(frame)
-                cv2.imwrite(frame_filename, frame)
-                if frame_number % 10 == 0:
-                    print(f"OK {frame_number} sous {frame_filename}")
-            frame_number += 1
-
-        cap.release()
-        print("Extraction terminee.")
-
-    def extract_to_video(self, greyscale=False, block_size=0):
+    def extract_to_video(self, greyscale=True, block_size=0, blur_radius=0):
         """
         Extrait des frames d'une vidéo à une fréquence spécifiée et pixellise les images.
 
@@ -211,9 +156,13 @@ class FileManager:
                 break
 
             # Extraire et sauvegarder les frames
-            if block_size:
+            if blur_radius > 0:
+                frame = FileManager.blur_image(frame, blur_radius)
+            if block_size > 1:
                 frame = FileManager.pixelate_image(frame, block_size)
-            elif not greyscale:
+            if greyscale:
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            else:
                 frame = FileManager.soft_black_and_white(frame)
             processed_frames.append(frame)
             frame_number += 1
@@ -243,85 +192,8 @@ class FileManager:
         final_output_path = self.output_vid
         command = [
             'ffmpeg', '-y', '-i', output_video_path, '-i', self.video_path,
-            '-c:v', 'copy', '-c:a', 'aac', '-map', '0:v:0', '-map', '1:a:0', '-vcodec', 'libx264', '-crf', '0',
+            '-c:v', 'copy', '-c:a', 'aac', '-map', '0:v:0', '-map', '1:a:0', '-vcodec', 'libx264', '-crf', '1',
             final_output_path
         ]
         subprocess.run(command, check=True)
         print(f"Video sauvegardee sous {final_output_path} !")
-
-    def extract_frames_super(self, fps_arg=2.3, min_block_size=5, max_block_size=50):
-        """
-        Extrait des frames d'une vidéo à une fréquence spécifiée, pixellise et convertit en noir et blanc.
-        La taille du bloc de pixellisation est ajustée en fonction du volume sonore de l'audio.
-
-        Args:
-            video_path (str): Chemin vers le fichier vidéo.
-            output_dir (str): Dossier où sauvegarder les frames extraites.
-            frames_per_second (float): Nombre de frames à extraire par seconde.
-            min_block_size (int): Taille minimale des blocs pour la pixellisation.
-            max_block_size (int): Taille maximale des blocs pour la pixellisation.
-        """
-        # Extraire l'audio
-        audio_path = "temp_audio.wav"
-        self.extract_audio()
-        volumes = self.analyze_audio()
-        try:
-            os.remove(audio_path)  # Supprimer le fichier audio temporaire
-        except Exception:
-            print(f"impossible de supprimer {audio_path} car il n'existe pas")
-
-        # Ouvrir la vidéo
-        cap = cv2.VideoCapture(self.video_path)
-
-        if not cap.isOpened():
-            print(f"Erreur lors de l'ouverture de la vidéo: {self.video_path}")
-            return
-
-        # Récupérer les propriétés de la vidéo
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        print(f"FPS de la vidéo: {fps}")
-        print(f"Nombre total de frames: {total_frames}")
-
-        # Calculer l'intervalle des frames à extraire
-        frame_interval = int(fps / fps_arg)
-        print(f"Intervalle de frames à extraire: {frame_interval}")
-
-        # Créer le dossier de sortie si il n'existe pas
-        if not os.path.exists(self.output_dir):
-            os.makedirs(self.output_dir)
-
-        volumes = np.array(volumes)
-        print(volumes)
-        volumes = np.where(volumes == -np.inf, -100, volumes)
-        volumes = np.where(volumes == np.inf, 100, volumes)
-        print(volumes)
-
-        frame_number = 0
-
-        while True:
-            ret, frame = cap.read()
-
-            if not ret:
-                break
-
-            # Extraire, pixelliser et convertir les frames
-            if frame_number % frame_interval == 0:
-                # Calculer la taille du bloc en fonction du volume sonore
-                current_time = frame_number / fps
-                audio_index = int(current_time)
-                if audio_index < len(volumes):
-                    volume = volumes[audio_index]
-                    # Mapper le volume sonore au range de block_size
-                    block_size = int(np.interp(volume, [-60, 0], [min_block_size, max_block_size]))
-                    pixelated_frame = FileManager.pixelate_image(frame, block_size)
-                    bw_frame = FileManager.convert_to_black_and_white(pixelated_frame)
-                    frame_filename = os.path.join(self.output_dir, f"frame_{frame_number:04d}.png")
-                    cv2.imwrite(frame_filename, bw_frame)
-                    print(
-                        f"Frame {frame_number} (volume: {volume:.2f} dB) sauvegardee sous {frame_filename} avec block_size {block_size}")
-
-            frame_number += 1
-
-        cap.release()
-        print("Extraction terminée.")

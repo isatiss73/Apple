@@ -5,4 +5,4 @@ output_dir = 'var_2208'
 
 
 manager = FileManager(video_path, output_dir)
-manager.extract_to_video()
+manager.extract_to_video(blur_radius=5)
